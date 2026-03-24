@@ -25,7 +25,9 @@ export default function WorkerDashboard() {
       setTasks(data.complaints);
     } catch (err) {
       toast.error('Failed to load tasks');
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const selectTask = (t) => {
@@ -34,14 +36,38 @@ export default function WorkerDashboard() {
   };
 
   const updateTask = async () => {
+    if (!selected?._id) {
+      toast.error('Please select a task first');
+      return;
+    }
+
     setSaving(true);
     try {
-      await api.put(`/workers/tasks/${selected._id}`, form);
+      console.log('WORKER UPDATING TASK:', selected._id, form);
+
+      // ✅ IMPORTANT FIX:
+      // worker must hit complaint update endpoint so credit logic runs
+      await api.put(`/complaints/${selected._id}`, {
+        status: form.status,
+        workerNotes: form.workerNotes
+      });
+
       toast.success('Task updated!');
-      fetchTasks();
+      await fetchTasks();
+
+      // refresh selected item too
+      const { data } = await api.get(`/complaints/${selected._id}`);
+      setSelected(data.complaint);
+      setForm({
+        status: data.complaint.status,
+        workerNotes: data.complaint.workerNotes || ''
+      });
     } catch (err) {
-      toast.error('Update failed');
-    } finally { setSaving(false); }
+      console.error('Worker update error:', err.response?.data || err.message);
+      toast.error(err.response?.data?.message || 'Update failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filtered = filter === 'all' ? tasks : tasks.filter(t => t.status === filter);
@@ -63,7 +89,6 @@ export default function WorkerDashboard() {
           <p className="text-gray-500 text-sm">Manage your assigned complaints</p>
         </div>
 
-        {/* Quick stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
             { label: 'Total Assigned', value: stats.total, icon: '📋', color: 'bg-blue-100 text-blue-700' },
@@ -82,19 +107,22 @@ export default function WorkerDashboard() {
         </div>
 
         <div className="grid lg:grid-cols-5 gap-6">
-          {/* Task list */}
           <div className="lg:col-span-2 card p-0 overflow-hidden">
             <div className="p-4 border-b border-gray-100">
               <div className="font-bold text-gray-800 mb-3">Assigned Tasks</div>
               <div className="flex gap-1 flex-wrap">
                 {['all', 'pending', 'in_progress', 'completed'].map(s => (
-                  <button key={s} onClick={() => setFilter(s)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold transition ${filter === s ? 'bg-primary-700 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                  <button
+                    key={s}
+                    onClick={() => setFilter(s)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold transition ${filter === s ? 'bg-primary-700 text-white' : 'bg-gray-100 text-gray-600'}`}
+                  >
                     {s.replace('_', ' ')}
                   </button>
                 ))}
               </div>
             </div>
+
             <div className="overflow-y-auto max-h-[600px]">
               {loading ? (
                 [...Array(4)].map((_, i) => <div key={i} className="skeleton h-20 m-3 rounded-xl" />)
@@ -105,8 +133,11 @@ export default function WorkerDashboard() {
                 </div>
               ) : (
                 filtered.map(t => (
-                  <div key={t._id} onClick={() => selectTask(t)}
-                    className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition ${selected?._id === t._id ? 'bg-primary-50 border-l-4 border-l-primary-500' : ''}`}>
+                  <div
+                    key={t._id}
+                    onClick={() => selectTask(t)}
+                    className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition ${selected?._id === t._id ? 'bg-primary-50 border-l-4 border-l-primary-500' : ''}`}
+                  >
                     <div className="flex items-start justify-between gap-2 mb-1">
                       <span className="text-sm font-semibold text-gray-800 line-clamp-1">{t.title}</span>
                       <StatusBadge status={t.status} />
@@ -122,7 +153,6 @@ export default function WorkerDashboard() {
             </div>
           </div>
 
-          {/* Detail */}
           <div className="lg:col-span-3 space-y-4">
             {!selected ? (
               <div className="card flex items-center justify-center h-64 text-gray-400 flex-col gap-3">
@@ -173,24 +203,33 @@ export default function WorkerDashboard() {
                   )}
                 </div>
 
-                {/* Update form */}
                 <div className="card">
                   <h3 className="font-bold text-gray-800 mb-4">📝 Update Progress</h3>
+
                   <div className="mb-4">
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Status</label>
-                    <select className="input-field" value={form.status}
-                      onChange={e => setForm({ ...form, status: e.target.value })}>
+                    <select
+                      className="input-field"
+                      value={form.status}
+                      onChange={e => setForm({ ...form, status: e.target.value })}
+                    >
                       <option value="pending">Pending</option>
                       <option value="in_progress">In Progress</option>
                       <option value="completed">Completed</option>
                     </select>
                   </div>
+
                   <div className="mb-4">
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Work Notes</label>
-                    <textarea className="input-field resize-none" rows={4}
+                    <textarea
+                      className="input-field resize-none"
+                      rows={4}
                       placeholder="Describe what work was done, materials used, etc."
-                      value={form.workerNotes} onChange={e => setForm({ ...form, workerNotes: e.target.value })} />
+                      value={form.workerNotes}
+                      onChange={e => setForm({ ...form, workerNotes: e.target.value })}
+                    />
                   </div>
+
                   <button onClick={updateTask} disabled={saving} className="btn-primary w-full">
                     {saving ? '⏳ Saving...' : '💾 Update Task'}
                   </button>

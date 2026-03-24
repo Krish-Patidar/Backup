@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import api from '../utils/api';
 import Sidebar from '../components/shared/Sidebar';
 import StatCard from '../components/shared/StatCard';
+import ComplaintMap from '../components/ComplaintMap';
 import { formatCurrency, CATEGORY_LABELS, CATEGORY_COLORS, formatDateTime } from '../utils/helpers';
 import { StatusBadge, PriorityBadge } from '../components/shared/ComplaintCard';
 import {
@@ -20,6 +21,7 @@ export default function CMDashboard() {
   const [trends, setTrends] = useState([]);
   const [complaints, setComplaints] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
 
   useEffect(() => { fetchAll(); }, []);
@@ -31,11 +33,16 @@ export default function CMDashboard() {
         api.get('/cm/department-performance'),
         api.get('/cm/category-distribution'),
         api.get('/cm/monthly-trends'),
-        api.get('/cm/complaints?limit=20'),
+        api.get('/cm/complaints?limit=100'),
       ]);
       setStats(s.data.stats);
       setDeptPerf(d.data.performance);
-      setCatDist(c.data.distribution.map(x => ({ name: CATEGORY_LABELS[x._id] || x._id, value: x.count })));
+      setCatDist(
+  c.data.distribution.map(x => ({
+    name: CATEGORY_LABELS[x._id] || x._id || 'Unknown',
+    value: x.count || 0
+  }))
+);
       setTrends(t.data.trends.map(x => ({
         name: `${x._id.month}/${x._id.year}`, total: x.total, resolved: x.resolved
       })));
@@ -44,6 +51,39 @@ export default function CMDashboard() {
       toast.error('Failed to load dashboard');
     } finally { setLoading(false); }
   };
+
+  const handleDownloadExcel = async () => {
+  try {
+    setDownloading(true);
+
+    const response = await api.get('/cm/export-excel', {
+      responseType: 'blob'
+    });
+
+    const blob = new Blob([response.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+
+    const today = new Date().toISOString().slice(0, 10);
+    link.setAttribute('download', `CM_Dashboard_Report_${today}.xlsx`);
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+
+    toast.success('Excel downloaded successfully');
+  } catch (err) {
+    console.error('Excel download failed:', err);
+    toast.error('Failed to download Excel');
+  } finally {
+    setDownloading(false);
+  }
+};
 
   const radarData = deptPerf.slice(0, 6).map(d => ({
     dept: d.code || d.name.substring(0, 6),
@@ -63,18 +103,29 @@ export default function CMDashboard() {
 
       <main className="flex-1 overflow-y-auto p-6">
         {/* Header */}
-        <div className="mb-6 flex items-center justify-between flex-wrap gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800">🏛️ CM Office Dashboard</h1>
-            <p className="text-gray-500 text-sm">Central monitoring of all grievance activities</p>
-          </div>
-          <div className="text-xs text-gray-400 bg-white border border-gray-200 rounded-xl px-3 py-2">
-            Last updated: {new Date().toLocaleTimeString()}
-          </div>
-        </div>
+     <div className="mb-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+  <div>
+    <h1 className="text-2xl font-bold text-gray-800">🏛️ CM Office Dashboard</h1>
+    <p className="text-gray-500 text-sm">Central monitoring of all grievance activities</p>
+  </div>
+
+  <div className="flex items-center gap-3 flex-wrap lg:justify-end">
+    <button
+      onClick={handleDownloadExcel}
+      disabled={downloading}
+      className="px-4 py-2 rounded-xl text-sm font-semibold bg-green-600 text-white hover:bg-green-700 transition disabled:opacity-60 flex items-center gap-2 shadow-sm"
+    >
+      {downloading ? '⏳ Downloading...' : '📥 Download Excel'}
+    </button>
+
+    <div className="text-xs text-gray-400 bg-white border border-gray-200 rounded-xl px-3 py-2">
+      Last updated: {new Date().toLocaleTimeString()}
+    </div>
+  </div>
+</div>
 
         {/* Tabs */}
-        <div className="flex gap-2 mb-6 flex-wrap">
+        <div className="flex gap-2 mb-8 flex-wrap">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)}
               className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${activeTab === t.id ? 'bg-primary-700 text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'}`}>
@@ -124,7 +175,11 @@ export default function CMDashboard() {
                     <ResponsiveContainer width="100%" height={220}>
                       <PieChart>
                         <Pie data={catDist} cx="50%" cy="50%" outerRadius={80} dataKey="value"
-                          label={({ name, percent }) => `${name.split(' ')[1] || name}: ${(percent * 100).toFixed(0)}%`}
+                          label={({ name, percent }) => {
+  const safeName = name ? String(name) : 'Unknown';
+  const shortName = safeName.includes(' ') ? safeName.split(' ')[1] : safeName;
+  return `${shortName}: ${(percent * 100).toFixed(0)}%`;
+}}
                           labelLine={false}>
                           {catDist.map((_, i) => <Cell key={i} fill={COLORS_ARR[i % COLORS_ARR.length]} />)}
                         </Pie>
@@ -148,6 +203,9 @@ export default function CMDashboard() {
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
+                </div>
+                <div className="mt-6">
+                   <ComplaintMap complaints={complaints} />
                 </div>
               </>
             )}

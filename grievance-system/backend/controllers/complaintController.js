@@ -7,9 +7,11 @@ const { sendComplaintSubmittedEmail, sendComplaintCompletedEmail } = require('..
 // Helper to call AI service
 const classifyWithAI = async (description) => {
   try {
-    const response = await axios.post(`${process.env.AI_SERVICE_URL}/predict`, {
-      text: description
-    }, { timeout: 5000 });
+    const response = await axios.post(
+      `${process.env.AI_SERVICE_URL}/predict`,
+      { text: description },
+      { timeout: 5000 }
+    );
     return response.data;
   } catch (error) {
     console.log('AI service unavailable, using fallback classification');
@@ -30,12 +32,18 @@ const fallbackClassify = (text) => {
   };
 
   for (const [category, keywords] of Object.entries(categories)) {
-    if (keywords.some(k => lower.includes(k))) {
-      const priority = lower.includes('urgent') || lower.includes('emergency') || lower.includes('danger') ? 'high'
-        : lower.includes('minor') || lower.includes('small') ? 'low' : 'medium';
+    if (keywords.some((k) => lower.includes(k))) {
+      const priority =
+        lower.includes('urgent') || lower.includes('emergency') || lower.includes('danger')
+          ? 'high'
+          : lower.includes('minor') || lower.includes('small')
+            ? 'low'
+            : 'medium';
+
       return { category, priority };
     }
   }
+
   return { category: 'other', priority: 'medium' };
 };
 
@@ -45,10 +53,8 @@ exports.createComplaint = async (req, res) => {
     const { title, description, lat, lng, address } = req.body;
     const image = req.file ? `/uploads/${req.file.filename}` : null;
 
-    // AI Classification
     const aiResult = await classifyWithAI(description);
 
-    // Find department based on category
     const department = await Department.findOne({
       categories: { $in: [aiResult.category] },
       isActive: true
@@ -58,7 +64,11 @@ exports.createComplaint = async (req, res) => {
       title,
       description,
       image,
-      location: { lat: parseFloat(lat) || 0, lng: parseFloat(lng) || 0, address },
+      location: {
+        lat: parseFloat(lat) || 0,
+        lng: parseFloat(lng) || 0,
+        address
+      },
       category: aiResult.category,
       priority: aiResult.priority,
       citizenId: req.user._id,
@@ -66,23 +76,27 @@ exports.createComplaint = async (req, res) => {
       aiClassified: true
     });
 
-    // Update department stats
     if (department) {
       await Department.findByIdAndUpdate(department._id, {
         $inc: { totalComplaints: 1, pending: 1 }
       });
     }
 
-    // Send email notification
     try {
       await sendComplaintSubmittedEmail(req.user.email, req.user.name, complaint);
     } catch (emailErr) {
       console.log('Email send failed:', emailErr.message);
     }
 
-    const populated = await Complaint.findById(complaint._id).populate('departmentId', 'name').populate('citizenId', 'name email');
+    const populated = await Complaint.findById(complaint._id)
+      .populate('departmentId', 'name')
+      .populate('citizenId', 'name email');
 
-    res.status(201).json({ success: true, complaint: populated, message: 'Complaint submitted successfully' });
+    res.status(201).json({
+      success: true,
+      complaint: populated,
+      message: 'Complaint submitted successfully'
+    });
   } catch (error) {
     console.error('Create complaint error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -107,6 +121,7 @@ exports.getComplaints = async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Complaint.countDocuments(filter);
+
     const complaints = await Complaint.find(filter)
       .populate('citizenId', 'name email')
       .populate('departmentId', 'name code')
@@ -118,7 +133,11 @@ exports.getComplaints = async (req, res) => {
     res.json({
       success: true,
       complaints,
-      pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) }
+      pagination: {
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / parseInt(limit))
+      }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -133,7 +152,10 @@ exports.getComplaint = async (req, res) => {
       .populate('departmentId', 'name code contactEmail')
       .populate('assignedTo', 'name email');
 
-    if (!complaint) return res.status(404).json({ success: false, message: 'Complaint not found' });
+    if (!complaint) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+
     res.json({ success: true, complaint });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -147,39 +169,65 @@ exports.updateComplaint = async (req, res) => {
     const proofImage = req.file ? `/uploads/${req.file.filename}` : undefined;
 
     const complaint = await Complaint.findById(req.params.id);
-    if (!complaint) return res.status(404).json({ success: false, message: 'Complaint not found' });
+    if (!complaint) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
 
-    const prevStatus = complaint.status;
+    const prevStatus = String(complaint.status).trim().toLowerCase();
+    const incomingStatus = status ? String(status).trim().toLowerCase() : '';
 
-    if (status) complaint.status = status;
+    console.log('📌 STATUS RECEIVED:', status);
+    console.log('📌 INCOMING STATUS:', incomingStatus);
+    console.log('📌 PREVIOUS STATUS:', prevStatus);
+    console.log('📌 ASSIGNED TO:', assignedTo);
+    console.log('📌 ROLE:', req.user.role);
+
+    if (incomingStatus) complaint.status = incomingStatus;
     if (assignedTo) complaint.assignedTo = assignedTo;
-    if (expense !== undefined) complaint.expense = expense;
+    if (expense !== undefined) complaint.expense = Number(expense) || 0;
     if (workerNotes) complaint.workerNotes = workerNotes;
     if (adminNotes) complaint.adminNotes = adminNotes;
     if (proofImage) complaint.proofImage = proofImage;
 
-    if (status === 'completed' && prevStatus !== 'completed') {
+    const currentStatus = String(complaint.status).trim().toLowerCase();
+
+    if (currentStatus === 'completed' && prevStatus !== 'completed') {
+      console.log('✅ ENTERED COMPLETED BLOCK');
+
       complaint.completedAt = new Date();
       const resolutionMs = complaint.completedAt - complaint.createdAt;
       complaint.resolutionTime = Math.round(resolutionMs / (1000 * 60 * 60));
 
-      // Award credits
-      if (complaint.isGenuine && !complaint.creditAwarded) {
-        complaint.creditAwarded = true;
+      if (!complaint.creditAwarded) {
+        console.log('💰 GIVING CREDITS TO USER:', complaint.citizenId);
+
         await User.findByIdAndUpdate(complaint.citizenId, {
           $inc: { credits: 10 },
-          $push: { creditHistory: { amount: 10, reason: `Complaint ${complaint.complaintNumber} resolved` } }
+          $push: {
+            creditHistory: {
+              amount: 10,
+              reason: `Complaint ${complaint.complaintNumber} resolved`
+            }
+          }
         });
+
+        complaint.creditAwarded = true;
       }
 
-      // Update department stats
       if (complaint.departmentId) {
-        await Department.findByIdAndUpdate(complaint.departmentId, {
-          $inc: { resolved: 1, pending: -1, totalExpense: expense || 0 }
-        });
+        const deptUpdate = {
+          $inc: { resolved: 1, totalExpense: Number(expense) || 0 }
+        };
+
+        if (prevStatus === 'pending') {
+          deptUpdate.$inc.pending = -1;
+        } else if (prevStatus === 'in_progress') {
+          deptUpdate.$inc.inProgress = -1;
+        }
+
+        await Department.findByIdAndUpdate(complaint.departmentId, deptUpdate);
       }
 
-      // Send completion email
       try {
         const citizen = await User.findById(complaint.citizenId);
         if (citizen) {
@@ -188,39 +236,53 @@ exports.updateComplaint = async (req, res) => {
       } catch (emailErr) {
         console.log('Email send failed:', emailErr.message);
       }
-    }
-
-    if (status === 'in_progress' && prevStatus === 'pending' && complaint.departmentId) {
+    } else if (currentStatus === 'in_progress' && prevStatus === 'pending' && complaint.departmentId) {
       await Department.findByIdAndUpdate(complaint.departmentId, {
         $inc: { inProgress: 1, pending: -1 }
       });
     }
 
     await complaint.save();
+
     const updated = await Complaint.findById(complaint._id)
       .populate('citizenId', 'name email')
       .populate('departmentId', 'name')
       .populate('assignedTo', 'name email');
 
-    res.json({ success: true, complaint: updated, message: 'Complaint updated successfully' });
+    res.json({
+      success: true,
+      complaint: updated,
+      message: 'Complaint updated successfully'
+    });
   } catch (error) {
     console.error('Update complaint error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
 // @desc Get complaint stats for citizen
 exports.getCitizenStats = async (req, res) => {
   try {
     const userId = req.user._id;
+
     const [total, pending, inProgress, completed] = await Promise.all([
       Complaint.countDocuments({ citizenId: userId }),
       Complaint.countDocuments({ citizenId: userId, status: 'pending' }),
       Complaint.countDocuments({ citizenId: userId, status: 'in_progress' }),
       Complaint.countDocuments({ citizenId: userId, status: 'completed' })
     ]);
+
     const user = await User.findById(userId);
-    res.json({ success: true, stats: { total, pending, inProgress, completed, credits: user.credits } });
+
+    res.json({
+      success: true,
+      stats: {
+        total,
+        pending,
+        inProgress,
+        completed,
+        credits: user.credits
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
